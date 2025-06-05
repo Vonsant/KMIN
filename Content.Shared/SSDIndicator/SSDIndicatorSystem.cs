@@ -6,9 +6,6 @@ using Robust.Shared.Timing;
 
 namespace Content.Shared.SSDIndicator;
 
-/// <summary>
-///     Handle changing player SSD indicator status, respecting ShouldSleep flag.
-/// </summary>
 public sealed class SSDIndicatorSystem : EntitySystem
 {
     [Dependency] private readonly IConfigurationManager _cfg = default!;
@@ -23,75 +20,73 @@ public sealed class SSDIndicatorSystem : EntitySystem
         SubscribeLocalEvent<SSDIndicatorComponent, PlayerDetachedEvent>(OnPlayerDetached);
         SubscribeLocalEvent<SSDIndicatorComponent, MapInitEvent>(OnMapInit);
 
-        _cfg.OnValueChanged(CCVars.ICSSDSleep, obj => _icSsdSleep = obj, true);
-        _cfg.OnValueChanged(CCVars.ICSSDSleepTime, obj => _icSsdSleepTime = obj, true);
+        _cfg.OnValueChanged(CCVars.ICSSDSleep, v => _icSsdSleep = v, true);
+        _cfg.OnValueChanged(CCVars.ICSSDSleepTime, v => _icSsdSleepTime = v, true);
     }
 
-    private void OnPlayerAttached(EntityUid uid, SSDIndicatorComponent component, PlayerAttachedEvent args)
+    private void OnPlayerAttached(EntityUid uid, SSDIndicatorComponent comp, PlayerAttachedEvent args)
     {
-        component.IsSSD = false;
+        comp.IsSSD = false;
 
-        // Removes force sleep and resets the time to zero
         if (_icSsdSleep)
         {
-            component.FallAsleepTime = TimeSpan.Zero;
-            if (component.ForcedSleepAdded) // Remove component only if it has been added by this system
+            // Cancel any pending sleep and remove ForcedSleeping if we added it.
+            comp.FallAsleepTime = TimeSpan.Zero;
+
+            if (comp.ForcedSleepAdded)
             {
                 EntityManager.RemoveComponent<ForcedSleepingComponent>(uid);
-                component.ForcedSleepAdded = false;
+                comp.ForcedSleepAdded = false;
             }
         }
-        Dirty(uid, component);
+
+        Dirty(uid, comp);
     }
 
-    private void OnPlayerDetached(EntityUid uid, SSDIndicatorComponent component, PlayerDetachedEvent args)
+    private void OnPlayerDetached(EntityUid uid, SSDIndicatorComponent comp, PlayerDetachedEvent args)
     {
-        component.IsSSD = true;
+        comp.IsSSD = true;
 
-        // Sets the time when the entity should fall asleep, only if sleeping is allowed
         if (_icSsdSleep)
         {
-            if (component.ShouldSleep)
-                component.FallAsleepTime = _timing.CurTime + TimeSpan.FromSeconds(_icSsdSleepTime);
-            else
-                component.FallAsleepTime = TimeSpan.Zero;
+            comp.FallAsleepTime = comp.ShouldSleep
+                ? _timing.CurTime + TimeSpan.FromSeconds(_icSsdSleepTime)
+                : TimeSpan.Zero; // disable sleeping for entities that must stay awake
         }
-        Dirty(uid, component);
+
+        Dirty(uid, comp);
     }
 
-    // Prevents mapped mobs from going to sleep immediately unless they allow sleeping.
-    private void OnMapInit(EntityUid uid, SSDIndicatorComponent component, MapInitEvent args)
+    private void OnMapInit(EntityUid uid, SSDIndicatorComponent comp, MapInitEvent args)
     {
-        if (_icSsdSleep &&
-            component.IsSSD &&
-            component.FallAsleepTime == TimeSpan.Zero &&
-            component.ShouldSleep)
+        if (_icSsdSleep && comp.IsSSD && comp.FallAsleepTime == TimeSpan.Zero && comp.ShouldSleep)
         {
-            component.FallAsleepTime = _timing.CurTime + TimeSpan.FromSeconds(_icSsdSleepTime);
+            comp.FallAsleepTime = _timing.CurTime + TimeSpan.FromSeconds(_icSsdSleepTime);
         }
     }
 
     public override void Update(float frameTime)
     {
-        base.Update(frameTime);
-
         if (!_icSsdSleep)
             return;
 
         var query = EntityQueryEnumerator<SSDIndicatorComponent>();
+        var now = _timing.CurTime;
 
-        while (query.MoveNext(out var uid, out var ssd))
+        while (query.MoveNext(out var uid, out var comp))
         {
-            // Forces the entity to sleep when the time has come and sleeping is allowed
-            if (ssd.IsSSD &&
-                ssd.ShouldSleep &&
-                ssd.FallAsleepTime <= _timing.CurTime &&
-                !TerminatingOrDeleted(uid) &&
-                !HasComp<ForcedSleepingComponent>(uid)) // Don't add the component if the entity has it from other sources
-            {
-                EnsureComp<ForcedSleepingComponent>(uid);
-                ssd.ForcedSleepAdded = true;
-            }
+            // Quick rejects – avoids extra checks every frame.
+            if (!comp.IsSSD || !comp.ShouldSleep)
+                continue;
+
+            if (comp.FallAsleepTime > now)
+                continue;
+
+            if (TerminatingOrDeleted(uid) || HasComp<ForcedSleepingComponent>(uid))
+                continue;
+
+            EnsureComp<ForcedSleepingComponent>(uid);
+            comp.ForcedSleepAdded = true;
         }
     }
 }
