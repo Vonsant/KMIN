@@ -1,6 +1,6 @@
 ﻿using Content.Shared.Bed.Sleep;
 using Content.Shared.CCVar;
-using Content.Server.NPC.Components;
+using Content.Shared.NPC.Components;
 using Robust.Shared.Configuration;
 using Robust.Shared.Player;
 using Robust.Shared.Timing;
